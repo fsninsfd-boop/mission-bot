@@ -7,10 +7,10 @@ import {
 } from 'discord.js';
 
 const token = process.env.DISCORD_TOKEN;
-const clientId = process.env.CLIENT_ID;
+const clientId = process.env.CLIENT_ID?.trim();
 const guildId = process.env.GUILD_ID;
-if (!token || token === 'cole_seu_token_aqui' || !clientId) {
-  console.error('Configure DISCORD_TOKEN e CLIENT_ID no arquivo .env antes de iniciar.');
+if (!token || token === 'cole_seu_token_aqui') {
+  console.error('Configure DISCORD_TOKEN no arquivo .env antes de iniciar.');
   process.exit(1);
 }
 
@@ -60,7 +60,8 @@ function admin(i){ return i.memberPermissions?.has(PermissionFlagsBits.ManageGui
 
 client.once(Events.ClientReady, async c=>{
   const rest=new REST({version:'10'}).setToken(token);
-  if(guildId) await rest.put(Routes.applicationGuildCommands(clientId,guildId),{body:cmds}); else await rest.put(Routes.applicationCommands(clientId),{body:cmds});
+  const applicationId=clientId || c.application.id;
+  if(guildId) await rest.put(Routes.applicationGuildCommands(applicationId,guildId),{body:cmds}); else await rest.put(Routes.applicationCommands(applicationId),{body:cmds});
   console.log(`Online como ${c.user.tag}`);
 });
 
