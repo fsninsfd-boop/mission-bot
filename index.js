@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS missions (id INTEGER PRIMARY KEY AUTOINCREMENT, guild
 CREATE TABLE IF NOT EXISTS progress (guild_id TEXT, user_id TEXT, mission_id INTEGER, value INTEGER DEFAULT 0, claimed INTEGER DEFAULT 0, PRIMARY KEY(guild_id,user_id,mission_id));
 CREATE TABLE IF NOT EXISTS config (guild_id TEXT PRIMARY KEY, log_channel TEXT, welcome_channel TEXT, ticket_category TEXT, currency TEXT DEFAULT 'moedas');
 `);
+try { db.exec('ALTER TABLE config ADD COLUMN counter_channel TEXT'); } catch {}
 
 const cmds = [
   new SlashCommandBuilder().setName('orb').setDescription('Controla seus registros de Orbs').addSubcommand(s=>s.setName('saldo').setDescription('Mostra seu saldo de Orbs')).addSubcommand(s=>s.setName('registrar').setDescription('Registra Orbs manualmente').addIntegerOption(o=>o.setName('quantidade').setDescription('Quantidade').setMinValue(1).setRequired(true)).addStringOption(o=>o.setName('missao').setDescription('Missão').setMaxLength(100).setRequired(true))).addSubcommand(s=>s.setName('historico').setDescription('Mostra seu histórico')).addSubcommand(s=>s.setName('ranking').setDescription('Ranking de Orbs')).addSubcommand(s=>s.setName('ajuda').setDescription('Mostra a ajuda')),
@@ -42,6 +43,7 @@ const cmds = [
   new SlashCommandBuilder().setName('expulsar').setDescription('Expulsa um membro').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)).addStringOption(o=>o.setName('motivo').setDescription('Motivo')).setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
   new SlashCommandBuilder().setName('avisar').setDescription('Registra um aviso').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)).addStringOption(o=>o.setName('motivo').setDescription('Motivo').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers),
   new SlashCommandBuilder().setName('configurar-log').setDescription('Define o canal de logs').addChannelOption(o=>o.setName('canal').setDescription('Canal').addChannelTypes(ChannelType.GuildText).setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
+  new SlashCommandBuilder().setName('configurar-contador').setDescription('Cria ou define o canal de voz com a contagem de membros').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('criar-recompensa').setDescription('Cria item na loja').addStringOption(o=>o.setName('nome').setDescription('Nome').setRequired(true)).addIntegerOption(o=>o.setName('preco').setDescription('Preço').setMinValue(1).setRequired(true)).addRoleOption(o=>o.setName('cargo').setDescription('Cargo entregue').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
   new SlashCommandBuilder().setName('criar-missao').setDescription('Cria missão de mensagens').addStringOption(o=>o.setName('nome').setDescription('Nome').setRequired(true)).addIntegerOption(o=>o.setName('meta').setDescription('Quantidade').setMinValue(1).setRequired(true)).addIntegerOption(o=>o.setName('recompensa').setDescription('Moedas').setMinValue(1).setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ].map(c=>c.toJSON());
@@ -53,6 +55,7 @@ function addCoins(g,u,amount,reason){ ensure(g,u); db.prepare('UPDATE users SET 
 function coins(g,u){ ensure(g,u); return db.prepare('SELECT coins FROM users WHERE guild_id=? AND user_id=?').get(g,u).coins; }
 function currency(g){ return db.prepare('SELECT currency FROM config WHERE guild_id=?').get(g)?.currency || 'moedas'; }
 async function log(guild, text){ const id=db.prepare('SELECT log_channel FROM config WHERE guild_id=?').get(guild.id)?.log_channel; const ch=id && guild.channels.cache.get(id); if(ch) ch.send({embeds:[new EmbedBuilder().setColor(0x5865f2).setDescription(text).setTimestamp()]}).catch(()=>{}); }
+async function updateCounter(guild){ const id=db.prepare('SELECT counter_channel FROM config WHERE guild_id=?').get(guild.id)?.counter_channel; const ch=id&&guild.channels.cache.get(id); if(ch) ch.setName(`👥 Membros: ${guild.memberCount}`).catch(()=>{}); }
 function admin(i){ return i.memberPermissions?.has(PermissionFlagsBits.ManageGuild); }
 
 client.once(Events.ClientReady, async c=>{
@@ -63,8 +66,9 @@ client.once(Events.ClientReady, async c=>{
 
 client.on(Events.GuildMemberAdd, async m=>{
   const id=db.prepare('SELECT welcome_channel FROM config WHERE guild_id=?').get(m.guild.id)?.welcome_channel; const ch=id&&m.guild.channels.cache.get(id);
-  if(ch) ch.send(`Bem-vindo(a), ${m}! Leia as regras e divirta-se.`).catch(()=>{}); await log(m.guild,`Entrou: ${m.user.tag}`);
+  if(ch) ch.send(`Bem-vindo(a), ${m}! Leia as regras e divirta-se.`).catch(()=>{}); await updateCounter(m.guild); await log(m.guild,`Entrou: ${m.user.tag}`);
 });
+client.on(Events.GuildMemberRemove, async m=>{ await updateCounter(m.guild); await log(m.guild,`Saiu: ${m.user.tag}`); });
 client.on(Events.MessageDelete, m=>{ if(m.guild) log(m.guild,`Mensagem apagada em ${m.channel}: ${m.author?.tag||'desconhecido'}`); });
 client.on(Events.MessageCreate, m=>{ if(!m.guild||m.author.bot)return; ensure(m.guild.id,m.author.id); const ms=db.prepare("SELECT * FROM missions WHERE guild_id=? AND kind='messages'").all(m.guild.id); for(const x of ms){db.prepare('INSERT OR IGNORE INTO progress(guild_id,user_id,mission_id) VALUES(?,?,?)').run(m.guild.id,m.author.id,x.id);db.prepare('UPDATE progress SET value=value+1 WHERE guild_id=? AND user_id=? AND mission_id=? AND claimed=0').run(m.guild.id,m.author.id,x.id);} });
 
@@ -87,6 +91,7 @@ client.on(Events.InteractionCreate, async i=>{
   if(name==='banir'||name==='expulsar'){ const target=i.options.getMember('usuario'), reason=i.options.getString('motivo')||'Sem motivo'; if(!target)return i.reply({content:'Membro não encontrado.',ephemeral:true}); if(name==='banir')await target.ban({reason});else await target.kick(reason); await log(i.guild,`${name} executado por ${i.user.tag} em ${target.user.tag}: ${reason}`); return i.reply(`Ação executada em ${target.user.tag}.`); }
   if(name==='avisar'){ const target=i.options.getUser('usuario'), reason=i.options.getString('motivo'); addCoins(g,target.id,0,`aviso: ${reason}`); await log(i.guild,`Aviso para ${target.tag} por ${i.user.tag}: ${reason}`); return i.reply(`Aviso registrado para ${target.tag}.`); }
   if(name==='configurar-log'){ const ch=i.options.getChannel('canal'); db.prepare('INSERT INTO config(guild_id,log_channel) VALUES(?,?) ON CONFLICT(guild_id) DO UPDATE SET log_channel=excluded.log_channel').run(g,ch.id); return i.reply(`Canal de logs definido: ${ch}.`); }
+  if(name==='configurar-contador'){ const old=db.prepare('SELECT counter_channel FROM config WHERE guild_id=?').get(g)?.counter_channel; let ch=old&&i.guild.channels.cache.get(old); if(!ch) ch=await i.guild.channels.create({name:`👥 Membros: ${i.guild.memberCount}`,type:ChannelType.GuildVoice,permissionOverwrites:[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.Connect]}]}); else await ch.setName(`👥 Membros: ${i.guild.memberCount}`); db.prepare('INSERT INTO config(guild_id,counter_channel) VALUES(?,?) ON CONFLICT(guild_id) DO UPDATE SET counter_channel=excluded.counter_channel').run(g,ch.id); return i.reply(`Contador criado: **${ch.name}**.`); }
   if(name==='criar-recompensa'){ const nome=i.options.getString('nome'), price=i.options.getInteger('preco'), role=i.options.getRole('cargo'); db.prepare('INSERT INTO shop(guild_id,name,price,role_id) VALUES(?,?,?,?)').run(g,nome,price,role.id); return i.reply(`Recompensa **${nome}** criada por ${price}.`); }
   if(name==='criar-missao'){ const nome=i.options.getString('nome'), goal=i.options.getInteger('meta'), reward=i.options.getInteger('recompensa'); db.prepare("INSERT INTO missions(guild_id,name,goal,reward,kind) VALUES(?,?,?,?, 'messages')").run(g,nome,goal,reward); return i.reply(`Missão criada: **${nome}**.`); }
  } catch(e){ console.error(e); if(!i.replied&&!i.deferred) await i.reply({content:'Ocorreu um erro ao executar o comando.',ephemeral:true}); }
