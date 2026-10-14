@@ -1,40 +1,54 @@
-# Discord Orb Bot
+# Orb Missions Bot
 
-Bot seguro para **registrar manualmente** missões e recompensas de Orbs no Discord.
+Bot multifunção para Discord com economia, missões, loja de cargos, tickets, moderação, logs e boas-vindas.
 
-> Este bot não abre anúncios, não simula visualizações, não usa self-bot e não automatiza sua conta. Você registra a recompensa depois de concluir a missão manualmente.
+## Recursos incluídos
 
-## Comandos
+- Economia: `/saldo`, `/trabalhar`, `/daily`, `/ranking` e `/pagar`.
+- Loja de recompensas com cargos: `/loja`, `/comprar` e `/criar-recompensa`.
+- Missões de mensagens: `/missoes` e `/criar-missao`.
+- Tickets: `/ticket`, botão de fechar e `/fechar`.
+- Moderação: `/limpar`, `/banir`, `/expulsar` e `/avisar`.
+- Logs de entradas, mensagens apagadas e ações de moderação.
+- Boas-vindas em canal configurado no banco.
+- Banco SQLite local, cooldowns e proteção para o bot não gerenciar cargos acima dele.
 
-- `/orb saldo` — mostra o saldo registrado do usuário.
-- `/orb registrar quantidade:<número> missão:<nome>` — registra Orbs recebidos manualmente.
-- `/orb historico` — mostra os últimos registros do usuário.
-- `/orb ranking` — mostra o ranking do servidor com base nos registros.
-- `/orb ajuda` — exibe a ajuda.
+## Configuração local
 
-## Instalação
+1. Copie `.env.example` para `.env`.
+2. Preencha `DISCORD_TOKEN` e `CLIENT_ID`. `GUILD_ID` é opcional e acelera o registro dos comandos em um servidor específico.
+3. Rode `npm install` e depois `npm start`.
 
-1. Instale Node.js 20 ou superior.
-2. Crie um aplicativo em [Discord Developer Portal](https://discord.com/developers/applications).
-3. Em **Bot**, crie o bot e copie o token. Nunca envie esse token para ninguém.
-4. Em **OAuth2 > URL Generator**, selecione os scopes `bot` e `applications.commands`.
-5. Dê somente as permissões necessárias: `View Channels`, `Send Messages` e `Use Slash Commands`.
-6. Copie `.env.example` para `.env` e preencha `DISCORD_TOKEN` e `CLIENT_ID`.
-7. Para testes, preencha também `GUILD_ID` com o ID do seu servidor.
-8. Execute:
+Nunca envie o token para mensagens, GitHub ou este arquivo.
 
-```bash
-npm install
-npm start
-```
+## Permissões do bot
 
-## Armazenamento
+Na criação do convite no Discord Developer Portal, habilite os scopes `bot` e `applications.commands`. Para os recursos incluídos, conceda pelo menos:
 
-Os registros ficam em `data/orbs.json`, localmente. O arquivo é ignorado pelo Git. Faça backup privado se necessário e não publique dados pessoais.
+- View Channels
+- Send Messages
+- Embed Links
+- Manage Messages
+- Manage Channels
+- Manage Roles
+- Kick Members
+- Ban Members
+- Read Message History
 
-## Segurança
+O cargo do bot precisa ficar acima dos cargos que ele deve entregar, mas abaixo dos cargos de administrador.
 
-- Não coloque o token no código.
-- Não dê permissões de administrador ao bot.
-- Não use automação para assistir anúncios ou concluir missões.
-- Se o token vazar, gere outro imediatamente no Developer Portal.
+## Railway
+
+1. Envie esta pasta para um repositório privado no GitHub.
+2. No Railway, escolha **New Project > Deploy from GitHub repo**.
+3. Em **Variables**, adicione `DISCORD_TOKEN`, `CLIENT_ID` e, opcionalmente, `GUILD_ID`.
+4. O comando de inicialização é `npm start`.
+5. Para persistir a economia, use um volume Railway montado na pasta do projeto; sem volume, o SQLite pode ser perdido em redeploy.
+
+## Comandos administrativos
+
+- `/configurar-log canal:#logs`
+- `/criar-recompensa nome:VIP preco:1000 cargo:@VIP`
+- `/criar-missao nome:Ativo meta:50 recompensa:250`
+
+Os nomes dos comandos não usam acentos porque o Discord não aceita acentos em nomes de slash commands.
