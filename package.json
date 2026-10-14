@@ -1,1 +1,1 @@
-{"name":"orb-missions-bot","version":"1.0.0","private":true,"type":"module","scripts":{"start":"node index.js","dev":"node --watch index.js"},"dependencies":{"better-sqlite3":"^11.8.1","discord.js":"^14.16.3","dotenv":"^16.4.7"}}
+{"name":"orb-missions-bot","version":"1.0.0","private":true,"type":"module","scripts":{"start":"node index.js"},"dependencies":{"@discordjs/voice":"^0.18.0","better-sqlite3":"^11.8.1","discord.js":"^14.16.3","dotenv":"^16.4.7"}}
