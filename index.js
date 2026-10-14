@@ -48,7 +48,7 @@ const cmds = [
   new SlashCommandBuilder().setName('criar-missao').setDescription('Cria missão de mensagens').addStringOption(o=>o.setName('nome').setDescription('Nome').setRequired(true)).addIntegerOption(o=>o.setName('meta').setDescription('Quantidade').setMinValue(1).setRequired(true)).addIntegerOption(o=>o.setName('recompensa').setDescription('Moedas').setMinValue(1).setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
 ].map(c=>c.toJSON());
 
-const client = new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildMembers,GatewayIntentBits.GuildMessages,GatewayIntentBits.MessageContent],partials:[Partials.Channel]});
+const client = new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildMessages],partials:[Partials.Channel]});
 const cooldown = (ms)=>Math.floor(Date.now()/1000)-ms/1000;
 function ensure(g,u){ db.prepare('INSERT OR IGNORE INTO users(guild_id,user_id) VALUES(?,?)').run(g,u); }
 function addCoins(g,u,amount,reason){ ensure(g,u); db.prepare('UPDATE users SET coins=coins+? WHERE guild_id=? AND user_id=?').run(amount,g,u); db.prepare('INSERT INTO transactions(guild_id,user_id,amount,reason,created_at) VALUES(?,?,?,?,?)').run(g,u,amount,reason,Date.now()); }
