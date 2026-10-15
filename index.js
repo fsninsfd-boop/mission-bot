@@ -1,55 +1,121 @@
 import 'dotenv/config';
-import Database from 'better-sqlite3';
-import { Client, GatewayIntentBits, Partials, REST, Routes, SlashCommandBuilder, PermissionFlagsBits, ChannelType, EmbedBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle, Events } from 'discord.js';
-import { joinVoiceChannel } from '@discordjs/voice';
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder, EmbedBuilder } from 'discord.js';
+import { promises as fs } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const token = process.env.DISCORD_TOKEN;
-const clientId = process.env.CLIENT_ID?.trim();
-const guildId = process.env.GUILD_ID;
-if (!token || token === 'cole_seu_token_aqui') { console.error('Configure DISCORD_TOKEN no Railway.'); process.exit(1); }
-const db = new Database('orb-missions.db'); db.pragma('journal_mode = WAL');
-db.exec(`
-CREATE TABLE IF NOT EXISTS users (guild_id TEXT, user_id TEXT, coins INTEGER DEFAULT 0, daily_at INTEGER DEFAULT 0, work_at INTEGER DEFAULT 0, PRIMARY KEY(guild_id,user_id));
-CREATE TABLE IF NOT EXISTS transactions (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, user_id TEXT, amount INTEGER, reason TEXT, created_at INTEGER);
-CREATE TABLE IF NOT EXISTS shop (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, name TEXT, price INTEGER, role_id TEXT, custom INTEGER DEFAULT 0);
-CREATE TABLE IF NOT EXISTS missions (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, name TEXT, goal INTEGER, reward INTEGER, kind TEXT DEFAULT 'messages');
-CREATE TABLE IF NOT EXISTS progress (guild_id TEXT, user_id TEXT, mission_id INTEGER, value INTEGER DEFAULT 0, claimed INTEGER DEFAULT 0, PRIMARY KEY(guild_id,user_id,mission_id));
-CREATE TABLE IF NOT EXISTS config (guild_id TEXT PRIMARY KEY, log_channel TEXT, welcome_channel TEXT, ticket_category TEXT, currency TEXT DEFAULT 'moedas', counter_channel TEXT, autorole_id TEXT, suggestions_channel TEXT, rules_text TEXT DEFAULT 'Respeite todos os membros e siga as regras do servidor.');
-CREATE TABLE IF NOT EXISTS warnings (id INTEGER PRIMARY KEY AUTOINCREMENT, guild_id TEXT, user_id TEXT, moderator_id TEXT, reason TEXT, created_at INTEGER);
-CREATE TABLE IF NOT EXISTS tickets (channel_id TEXT PRIMARY KEY, guild_id TEXT, owner_id TEXT, claimed_by TEXT, opened_at INTEGER);
-`);
-for (const q of ["ALTER TABLE config ADD COLUMN counter_channel TEXT", "ALTER TABLE config ADD COLUMN autorole_id TEXT", "ALTER TABLE config ADD COLUMN suggestions_channel TEXT", "ALTER TABLE config ADD COLUMN rules_text TEXT DEFAULT 'Respeite todos os membros e siga as regras do servidor.'"]) { try { db.exec(q); } catch {} }
-const C = (n,d)=>new SlashCommandBuilder().setName(n).setDescription(d);
-const cmds = [
- C('painel','Abre o painel central do servidor'), C('saldo','Mostra seu saldo'), C('trabalhar','Trabalhe e receba moedas'), C('daily','Resgate sua recompensa diária'), C('ranking','Ranking de moedas'),
- C('pagar','Transfere moedas').addUserOption(o=>o.setName('usuario').setDescription('Destinatário').setRequired(true)).addIntegerOption(o=>o.setName('valor').setDescription('Valor').setMinValue(1).setRequired(true)),
- C('loja','Lista as recompensas da loja'), C('anunciar-missao','Anuncia uma missão do servidor').addStringOption(o=>o.setName('titulo').setDescription('Título').setRequired(true)).addStringOption(o=>o.setName('detalhes').setDescription('Detalhes ou recompensa').setRequired(true)).addStringOption(o=>o.setName('link').setDescription('Link opcional')), C('comprar','Compra uma recompensa').addIntegerOption(o=>o.setName('id').setDescription('ID').setRequired(true)), C('missoes','Lista suas missões'), C('ticket','Abre um ticket de suporte'), C('fechar','Fecha o ticket atual'),
- C('limpar','Apaga mensagens').addIntegerOption(o=>o.setName('quantidade').setDescription('1 a 100').setMinValue(1).setMaxValue(100).setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageMessages),
- C('banir','Bane um membro').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)).addStringOption(o=>o.setName('motivo').setDescription('Motivo')).setDefaultMemberPermissions(PermissionFlagsBits.BanMembers),
- C('expulsar','Expulsa um membro').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)).addStringOption(o=>o.setName('motivo').setDescription('Motivo')).setDefaultMemberPermissions(PermissionFlagsBits.KickMembers),
- C('avisar','Registra um aviso').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)).addStringOption(o=>o.setName('motivo').setDescription('Motivo').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers), C('avisos','Consulta avisos').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)),
- C('configurar-log','Define o canal de logs').addChannelOption(o=>o.setName('canal').setDescription('Canal').addChannelTypes(ChannelType.GuildText).setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
- C('criar-call','Cria uma call e conecta o bot nela').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels), C('configurar-contador','Cria contador de membros').setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
- C('criar-recompensa','Cria item na loja').addStringOption(o=>o.setName('nome').setDescription('Nome').setRequired(true)).addIntegerOption(o=>o.setName('preco').setDescription('Preço').setMinValue(1).setRequired(true)).addRoleOption(o=>o.setName('cargo').setDescription('Cargo').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
- C('criar-missao','Cria missão de mensagens').addStringOption(o=>o.setName('nome').setDescription('Nome').setRequired(true)).addIntegerOption(o=>o.setName('meta').setDescription('Quantidade').setMinValue(1).setRequired(true)).addIntegerOption(o=>o.setName('recompensa').setDescription('Moedas').setMinValue(1).setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
- C('configurar-boasvindas','Define canal de boas-vindas').addChannelOption(o=>o.setName('canal').setDescription('Canal').addChannelTypes(ChannelType.GuildText).setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild), C('configurar-cargo-auto','Define cargo automático').addRoleOption(o=>o.setName('cargo').setDescription('Cargo').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild), C('configurar-sugestoes','Define canal de sugestões').addChannelOption(o=>o.setName('canal').setDescription('Canal').addChannelTypes(ChannelType.GuildText).setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild),
- C('sugestao','Envia uma sugestão').addStringOption(o=>o.setName('texto').setDescription('Sugestão').setMaxLength(1000).setRequired(true)), C('enquete','Cria uma enquete').addStringOption(o=>o.setName('pergunta').setDescription('Pergunta').setMaxLength(200).setRequired(true)), C('regras','Mostra as regras do servidor'), C('avatar','Mostra um avatar').addUserOption(o=>o.setName('usuario').setDescription('Usuário')), C('servidor','Mostra informações do servidor'), C('usuario','Mostra informações de um membro').addUserOption(o=>o.setName('membro').setDescription('Membro')),
- C('silenciar','Silencia membro').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)).addIntegerOption(o=>o.setName('minutos').setDescription('Minutos').setMinValue(1).setMaxValue(40320).setRequired(true)).addStringOption(o=>o.setName('motivo').setDescription('Motivo')).setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers), C('desilenciar','Remove silêncio').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ModerateMembers), C('ticket-assumir','Assume o ticket').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels), C('ticket-adicionar','Adiciona membro ao ticket').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels), C('ticket-remover','Remove membro do ticket').addUserOption(o=>o.setName('usuario').setDescription('Membro').setRequired(true)).setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels), C('transcript','Gera registro do ticket').setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
-].map(x=>x.toJSON());
-const client = new Client({intents:[GatewayIntentBits.Guilds,GatewayIntentBits.GuildMessages,...(process.env.ENABLE_MEMBERS_INTENT==='true'?[GatewayIntentBits.GuildMembers]:[])],partials:[Partials.Channel]});
-function ensure(g,u){db.prepare('INSERT OR IGNORE INTO users(guild_id,user_id) VALUES(?,?)').run(g,u)} function addCoins(g,u,n,r){ensure(g,u);db.prepare('UPDATE users SET coins=coins+? WHERE guild_id=? AND user_id=?').run(n,g,u);db.prepare('INSERT INTO transactions(guild_id,user_id,amount,reason,created_at) VALUES(?,?,?,?,?)').run(g,u,n,r,Date.now())} function coins(g,u){ensure(g,u);return db.prepare('SELECT coins FROM users WHERE guild_id=? AND user_id=?').get(g,u).coins} function cur(g){return db.prepare('SELECT currency FROM config WHERE guild_id=?').get(g)?.currency||'moedas'} async function log(g,t){const id=db.prepare('SELECT log_channel FROM config WHERE guild_id=?').get(g.id)?.log_channel;const ch=id&&g.channels.cache.get(id);if(ch)ch.send({embeds:[new EmbedBuilder().setColor(0x5865f2).setDescription(t).setTimestamp()]}).catch(()=>{})} async function counter(g){const id=db.prepare('SELECT counter_channel FROM config WHERE guild_id=?').get(g.id)?.counter_channel;const ch=id&&g.channels.cache.get(id);if(ch)ch.setName(`👥 Membros: ${g.memberCount}`).catch(()=>{})}
-client.once(Events.ClientReady,async c=>{const rest=new REST({version:'10'}).setToken(token);const app=clientId||c.user.id;if(guildId)await rest.put(Routes.applicationGuildCommands(app,guildId),{body:cmds});else await rest.put(Routes.applicationCommands(app),{body:cmds});console.log(`Online como ${c.user.tag}`);});
-client.on(Events.GuildMemberAdd,async m=>{const a=db.prepare('SELECT autorole_id FROM config WHERE guild_id=?').get(m.guild.id)?.autorole_id;if(a){const r=m.guild.roles.cache.get(a);if(r&&m.guild.members.me?.permissions.has(PermissionFlagsBits.ManageRoles)&&r.position<m.guild.members.me.roles.highest.position)m.roles.add(r).catch(()=>{})}const id=db.prepare('SELECT welcome_channel FROM config WHERE guild_id=?').get(m.guild.id)?.welcome_channel;const ch=id&&m.guild.channels.cache.get(id);if(ch)ch.send(`Bem-vindo(a), ${m}! Leia as regras e divirta-se.`).catch(()=>{});await counter(m.guild);await log(m.guild,`Entrou: ${m.user.tag}`)}); client.on(Events.GuildMemberRemove,async m=>{await counter(m.guild);await log(m.guild,`Saiu: ${m.user.tag}`)});
-client.on(Events.MessageCreate,m=>{if(!m.guild||m.author.bot)return;ensure(m.guild.id,m.author.id);for(const x of db.prepare("SELECT * FROM missions WHERE guild_id=? AND kind='messages'").all(m.guild.id)){db.prepare('INSERT OR IGNORE INTO progress(guild_id,user_id,mission_id) VALUES(?,?,?)').run(m.guild.id,m.author.id,x.id);db.prepare('UPDATE progress SET value=value+1 WHERE guild_id=? AND user_id=? AND mission_id=? AND claimed=0').run(m.guild.id,m.author.id,x.id)}});
-client.on(Events.InteractionCreate,async i=>{try{if(i.isButton()&&i.customId==='close_ticket'){await i.reply('Ticket fechado.');db.prepare('DELETE FROM tickets WHERE channel_id=?').run(i.channel.id);setTimeout(()=>i.channel?.delete().catch(()=>{}),1200);return}if(i.isButton()&&i.customId.startsWith('panel_')){const a=i.customId.slice(6);const m={economia:'`/saldo` · `/trabalhar` · `/daily` · `/ranking` · `/pagar`',loja:'`/loja` · `/comprar` · `/criar-recompensa`',missoes:'`/missoes` · `/criar-missao`',tickets:'`/ticket` · `/fechar` · `/ticket-assumir` · `/transcript`',moderacao:'`/limpar` · `/banir` · `/expulsar` · `/avisar` · `/silenciar`',eventos:'`/criar-call` · `/configurar-contador`',config:'`/configurar-log` · `/configurar-boasvindas` · `/configurar-cargo-auto` · `/configurar-sugestoes`'};return i.reply({content:`**${a}**\n${m[a]||'Use os comandos do bot.'}`,ephemeral:true})}if(!i.isChatInputCommand())return;const g=i.guild.id,u=i.user.id,n=i.commandName;
-if(n==='painel'){const r1=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('panel_economia').setLabel('Economia').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('panel_loja').setLabel('Loja').setStyle(ButtonStyle.Success),new ButtonBuilder().setCustomId('panel_missoes').setLabel('Missões').setStyle(ButtonStyle.Secondary));const r2=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('panel_tickets').setLabel('Tickets').setStyle(ButtonStyle.Primary),new ButtonBuilder().setCustomId('panel_moderacao').setLabel('Moderação').setStyle(ButtonStyle.Danger),new ButtonBuilder().setCustomId('panel_eventos').setLabel('Eventos e voz').setStyle(ButtonStyle.Secondary));const r3=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('panel_config').setLabel('Configuração').setStyle(ButtonStyle.Secondary));return i.reply({content:'**Painel central do servidor**\nEscolha uma área:',components:[r1,r2,r3]})}
-if(n==='saldo')return i.reply(`Você tem **${coins(g,u)} ${cur(g)}**.`); if(n==='trabalhar'){ensure(g,u);const x=db.prepare('SELECT work_at FROM users WHERE guild_id=? AND user_id=?').get(g,u);if(x.work_at>Date.now()-3600000)return i.reply({content:'Você já trabalhou nesta hora.',ephemeral:true});const v=Math.floor(Math.random()*101)+50;db.prepare('UPDATE users SET work_at=? WHERE guild_id=? AND user_id=?').run(Date.now(),g,u);addCoins(g,u,v,'trabalho');return i.reply(`Você recebeu **${v} ${cur(g)}**.`)} if(n==='daily'){ensure(g,u);const x=db.prepare('SELECT daily_at FROM users WHERE guild_id=? AND user_id=?').get(g,u);if(x.daily_at>Date.now()-86400000)return i.reply({content:'Daily ainda não disponível.',ephemeral:true});addCoins(g,u,500,'daily');db.prepare('UPDATE users SET daily_at=? WHERE guild_id=? AND user_id=?').run(Date.now(),g,u);return i.reply(`Recompensa diária: **500 ${cur(g)}**.`)} if(n==='ranking'){const a=db.prepare('SELECT user_id,coins FROM users WHERE guild_id=? ORDER BY coins DESC LIMIT 10').all(g);return i.reply('**Ranking**\n'+(a.map((x,j)=>`${j+1}. <@${x.user_id}> — ${x.coins}`).join('\n')||'Sem dados.'))} if(n==='pagar'){const t=i.options.getUser('usuario'),v=i.options.getInteger('valor');if(t.bot||t.id===u||coins(g,u)<v)return i.reply({content:'Destinatário inválido ou saldo insuficiente.',ephemeral:true});addCoins(g,u,-v,`pagamento para ${t.id}`);addCoins(g,t.id,v,`pagamento de ${u}`);return i.reply(`Transferência concluída: ${t} recebeu **${v}**.`)}
-if(n==='anunciar-missao'){const titulo=i.options.getString('titulo'),det=i.options.getString('detalhes'),link=i.options.getString('link');const ch=i.channel;if(!i.memberPermissions?.has(PermissionFlagsBits.ManageGuild))return i.reply({content:'Somente administradores podem anunciar missões.',ephemeral:true});await ch.send({content:'@everyone',allowedMentions:{parse:['everyone']},embeds:[new EmbedBuilder().setColor(0xfaa61a).setTitle('🎯 Nova missão disponível').setDescription(`**${titulo}**\n${det}${link?'\n\n[Mais informações]('+link+')':''}`).setFooter({text:'Anúncio do Orb Missions Bot'}).setTimestamp()]});return i.reply({content:'Missão anunciada neste canal.',ephemeral:true})} if(n==='loja'){const a=db.prepare('SELECT * FROM shop WHERE guild_id=?').all(g);return i.reply(a.length?a.map(x=>`**#${x.id} — ${x.name}**: ${x.price} ${cur(g)} — <@&${x.role_id}>`).join('\n'):'Loja vazia.')} if(n==='comprar'){const x=db.prepare('SELECT * FROM shop WHERE guild_id=? AND id=?').get(g,i.options.getInteger('id'));if(!x)return i.reply({content:'Recompensa não encontrada.',ephemeral:true});const r=i.guild.roles.cache.get(x.role_id);if(!r||coins(g,u)<x.price||r.position>=i.guild.members.me.roles.highest.position)return i.reply({content:'Saldo insuficiente ou cargo não gerenciável.',ephemeral:true});addCoins(g,u,-x.price,`compra #${x.id}`);await i.member.roles.add(r);return i.reply(`Compra realizada: você recebeu ${r}.`)} if(n==='missoes'){const a=db.prepare('SELECT m.*,COALESCE(p.value,0) value,p.claimed FROM missions m LEFT JOIN progress p ON p.mission_id=m.id AND p.guild_id=? AND p.user_id=? WHERE m.guild_id=?').all(g,u,g);return i.reply(a.length?a.map(x=>`**#${x.id} ${x.name}** — ${Math.min(x.value,x.goal)}/${x.goal} — ${x.reward} moedas`).join('\n'):'Nenhuma missão cadastrada.')}
-if(n==='ticket'){const me=i.guild.members.me;if(!me?.permissions.has(PermissionFlagsBits.ManageChannels))return i.reply({content:'Preciso de Gerenciar Canais.',ephemeral:true});const name=`ticket-${i.user.username.toLowerCase().replace(/[^a-z0-9-]/g,'-')}`.slice(0,90);if(i.guild.channels.cache.find(c=>c.name===name))return i.reply({content:'Você já possui um ticket.',ephemeral:true});const ch=await i.guild.channels.create({name,type:ChannelType.GuildText,permissionOverwrites:[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.ViewChannel]},{id:u,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ReadMessageHistory]},{id:me.id,allow:[PermissionFlagsBits.ViewChannel,PermissionFlagsBits.SendMessages,PermissionFlagsBits.ManageChannels,PermissionFlagsBits.ReadMessageHistory]}]});db.prepare('INSERT INTO tickets(channel_id,guild_id,owner_id,opened_at) VALUES(?,?,?,?)').run(ch.id,g,u,Date.now());const row=new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('close_ticket').setLabel('Fechar ticket').setStyle(ButtonStyle.Danger));await ch.send({content:`Olá ${i.user}, descreva seu problema.`,components:[row]});return i.reply({content:`Ticket criado: ${ch}`,ephemeral:true})} if(n==='fechar'){if(!i.channel.name.startsWith('ticket-'))return i.reply({content:'Use dentro de um ticket.',ephemeral:true});await i.reply('Fechando ticket...');return setTimeout(()=>i.channel.delete().catch(()=>{}),1000)}
-if(n==='limpar'){const q=i.options.getInteger('quantidade');await i.channel.bulkDelete(q,true);return i.reply({content:`${q} mensagens apagadas.`,ephemeral:true})} if(n==='banir'||n==='expulsar'){const t=i.options.getMember('usuario'),r=i.options.getString('motivo')||'Sem motivo';if(!t)return i.reply({content:'Membro não encontrado.',ephemeral:true});if(n==='banir')await t.ban({reason:r});else await t.kick(r);await log(i.guild,`${n}: ${t.user.tag} — ${r}`);return i.reply('Ação executada.')} if(n==='avisar'){const t=i.options.getUser('usuario'),r=i.options.getString('motivo');db.prepare('INSERT INTO warnings(guild_id,user_id,moderator_id,reason,created_at) VALUES(?,?,?,?,?)').run(g,t.id,u,r,Date.now());await log(i.guild,`Aviso para ${t.tag}: ${r}`);return i.reply(`Aviso registrado para ${t.tag}.`)} if(n==='avisos'){const t=i.options.getUser('usuario'),a=db.prepare('SELECT reason,moderator_id,created_at FROM warnings WHERE guild_id=? AND user_id=? ORDER BY id DESC LIMIT 10').all(g,t.id);return i.reply({content:a.length?a.map((x,j)=>`${j+1}. ${x.reason} — <@${x.moderator_id}>`).join('\n'):`${t} não possui avisos.`,ephemeral:true})}
-if(n==='configurar-log'){const c=i.options.getChannel('canal');db.prepare('INSERT INTO config(guild_id,log_channel) VALUES(?,?) ON CONFLICT(guild_id) DO UPDATE SET log_channel=excluded.log_channel').run(g,c.id);return i.reply(`Logs definidos em ${c}.`)} if(n==='configurar-boasvindas'){const c=i.options.getChannel('canal');db.prepare('INSERT INTO config(guild_id,welcome_channel) VALUES(?,?) ON CONFLICT(guild_id) DO UPDATE SET welcome_channel=excluded.welcome_channel').run(g,c.id);return i.reply(`Boas-vindas definidas em ${c}.`)} if(n==='configurar-cargo-auto'){const r=i.options.getRole('cargo');if(r.position>=i.guild.members.me.roles.highest.position)return i.reply({content:'Coloque o cargo abaixo do meu cargo.',ephemeral:true});db.prepare('INSERT INTO config(guild_id,autorole_id) VALUES(?,?) ON CONFLICT(guild_id) DO UPDATE SET autorole_id=excluded.autorole_id').run(g,r.id);return i.reply(`Cargo automático: ${r}.`)} if(n==='configurar-sugestoes'){const c=i.options.getChannel('canal');db.prepare('INSERT INTO config(guild_id,suggestions_channel) VALUES(?,?) ON CONFLICT(guild_id) DO UPDATE SET suggestions_channel=excluded.suggestions_channel').run(g,c.id);return i.reply(`Sugestões definidas em ${c}.`)} if(n==='sugestao'){const text=i.options.getString('texto'),id=db.prepare('SELECT suggestions_channel FROM config WHERE guild_id=?').get(g)?.suggestions_channel,c=id&&i.guild.channels.cache.get(id);if(!c)return i.reply({content:'Configure o canal primeiro.',ephemeral:true});const m=await c.send({embeds:[new EmbedBuilder().setColor(0x57f287).setTitle('Nova sugestão').setDescription(text).setFooter({text:i.user.tag})]});await m.react('✅');await m.react('❌');return i.reply({content:`Sugestão enviada em ${c}.`,ephemeral:true})} if(n==='enquete'){const q=i.options.getString('pergunta'),m=await i.channel.send({embeds:[new EmbedBuilder().setColor(0x5865f2).setTitle('Enquete').setDescription(q)]});await m.react('✅');await m.react('❌');return i.reply({content:'Enquete criada.',ephemeral:true})}
-if(n==='regras'){const r=db.prepare('SELECT rules_text FROM config WHERE guild_id=?').get(g)?.rules_text||'Respeite todos, não faça spam e siga a equipe.';return i.reply({embeds:[new EmbedBuilder().setTitle(`Regras de ${i.guild.name}`).setDescription(r)]})} if(n==='avatar'){const x=i.options.getUser('usuario')||i.user;return i.reply({embeds:[new EmbedBuilder().setTitle(`Avatar de ${x.tag}`).setImage(x.displayAvatarURL({size:1024,dynamic:true}))]})} if(n==='servidor'){return i.reply({embeds:[new EmbedBuilder().setTitle(i.guild.name).setThumbnail(i.guild.iconURL()).addFields({name:'Membros',value:String(i.guild.memberCount),inline:true},{name:'Canais',value:String(i.guild.channels.cache.size),inline:true})]})} if(n==='usuario'){const m=i.options.getMember('membro')||i.member;return i.reply({embeds:[new EmbedBuilder().setTitle(m.user.tag).setThumbnail(m.user.displayAvatarURL()).addFields({name:'ID',value:m.id,inline:true},{name:'Entrou',value:`<t:${Math.floor(m.joinedTimestamp/1000)}:R>`,inline:true})]})}
-if(n==='silenciar'){const t=i.options.getMember('usuario'),min=i.options.getInteger('minutos'),r=i.options.getString('motivo')||'Sem motivo';if(!t?.moderatable)return i.reply({content:'Não consigo moderar esse membro.',ephemeral:true});await t.timeout(min*60000,r);return i.reply(`${t} silenciado por ${min} minutos.`)} if(n==='desilenciar'){const t=i.options.getMember('usuario');if(!t?.moderatable)return i.reply({content:'Não consigo moderar esse membro.',ephemeral:true});await t.timeout(null);return i.reply(`Silêncio removido de ${t}.`)} if(n==='ticket-assumir'){const t=db.prepare('SELECT * FROM tickets WHERE channel_id=?').get(i.channel.id);if(!t)return i.reply({content:'Use dentro de um ticket.',ephemeral:true});db.prepare('UPDATE tickets SET claimed_by=? WHERE channel_id=?').run(u,i.channel.id);return i.reply(`Ticket assumido por ${i.user}.`)} if(n==='ticket-adicionar'||n==='ticket-remover'){if(!db.prepare('SELECT 1 FROM tickets WHERE channel_id=?').get(i.channel.id))return i.reply({content:'Use dentro de um ticket.',ephemeral:true});const t=i.options.getUser('usuario');if(n==='ticket-adicionar'){await i.channel.permissionOverwrites.edit(t.id,{ViewChannel:true,SendMessages:true,ReadMessageHistory:true});return i.reply(`${t} adicionado.`)}await i.channel.permissionOverwrites.delete(t.id);return i.reply(`${t} removido.`)} if(n==='transcript'){if(!i.channel.name.startsWith('ticket-'))return i.reply({content:'Use dentro de um ticket.',ephemeral:true});const a=await i.channel.messages.fetch({limit:100}),body=[...a.values()].reverse().map(x=>`[${new Date(x.createdTimestamp).toISOString()}] ${x.author.tag}: ${x.content}`).join('\n');return i.reply({files:[{attachment:Buffer.from(body||'Sem mensagens.'),name:`${i.channel.name}.txt`}],ephemeral:true})}
-if(n==='criar-call'){const me=i.guild.members.me;if(!me?.permissions.has(PermissionFlagsBits.ManageChannels))return i.reply({content:'Preciso de Gerenciar Canais.',ephemeral:true});let ch=i.guild.channels.cache.find(c=>c.type===ChannelType.GuildVoice&&c.name==='🤖 Bot Online');if(!ch)ch=await i.guild.channels.create({name:'🤖 Bot Online',type:ChannelType.GuildVoice});if(!me.permissions.has(PermissionFlagsBits.Connect))return i.reply({content:'Call criada, mas falta Conectar.',ephemeral:true});joinVoiceChannel({channelId:ch.id,guildId:g,adapterCreator:i.guild.voiceAdapterCreator,selfDeaf:true});return i.reply(`Call criada: ${ch}. O bot entrou e reconecta automaticamente quando possível.`)} if(n==='configurar-contador'){let id=db.prepare('SELECT counter_channel FROM config WHERE guild_id=?').get(g)?.counter_channel,c=id&&i.guild.channels.cache.get(id);if(!c)c=await i.guild.channels.create({name:`👥 Membros: ${i.guild.memberCount}`,type:ChannelType.GuildVoice,permissionOverwrites:[{id:i.guild.roles.everyone.id,deny:[PermissionFlagsBits.Connect]}]});else await c.setName(`👥 Membros: ${i.guild.memberCount}`);db.prepare('INSERT INTO config(guild_id,counter_channel) VALUES(?,?) ON CONFLICT(guild_id) DO UPDATE SET counter_channel=excluded.counter_channel').run(g,c.id);return i.reply(`Contador criado: ${c.name}`)} if(n==='criar-recompensa'){const name=i.options.getString('nome'),price=i.options.getInteger('preco'),r=i.options.getRole('cargo');db.prepare('INSERT INTO shop(guild_id,name,price,role_id) VALUES(?,?,?,?)').run(g,name,price,r.id);return i.reply(`Recompensa criada: ${name}.`)} if(n==='criar-missao'){db.prepare("INSERT INTO missions(guild_id,name,goal,reward,kind) VALUES(?,?,?,?, 'messages')").run(g,i.options.getString('nome'),i.options.getInteger('meta'),i.options.getInteger('recompensa'));return i.reply('Missão criada.')}
-}catch(e){console.error(e);if(!i.replied&&!i.deferred)await i.reply({content:'Ocorreu um erro. Verifique as permissões do bot.',ephemeral:true})}});
-client.login(token);
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const DATA_DIR = path.resolve(__dirname, '../data');
+const DATA_FILE = path.join(DATA_DIR, 'orbs.json');
+
+function required(name) {
+  const value = process.env[name]?.trim();
+  if (!value) throw new Error(`Variável obrigatória ausente: ${name}`);
+  return value;
+}
+
+const token = required('DISCORD_TOKEN');
+const clientId = required('CLIENT_ID');
+const guildId = process.env.GUILD_ID?.trim();
+
+const commands = [
+  new SlashCommandBuilder().setName('orb').setDescription('Controla seus registros de Orbs')
+    .addSubcommand((sub) => sub.setName('saldo').setDescription('Mostra seu saldo registrado'))
+    .addSubcommand((sub) => sub.setName('registrar').setDescription('Registra Orbs recebidos manualmente')
+      .addIntegerOption((opt) => opt.setName('quantidade').setDescription('Quantidade de Orbs').setRequired(true).setMinValue(1).setMaxValue(1000000))
+      .addStringOption((opt) => opt.setName('missao').setDescription('Nome da missão').setRequired(true).setMaxLength(100)))
+    .addSubcommand((sub) => sub.setName('historico').setDescription('Mostra seus últimos registros'))
+    .addSubcommand((sub) => sub.setName('ranking').setDescription('Mostra o ranking deste servidor'))
+    .addSubcommand((sub) => sub.setName('ajuda').setDescription('Mostra como usar o bot'))
+    .toJSON(),
+];
+
+async function loadDb() {
+  await fs.mkdir(DATA_DIR, { recursive: true });
+  try {
+    return JSON.parse(await fs.readFile(DATA_FILE, 'utf8'));
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+    const initial = { users: {} };
+    await saveDb(initial);
+    return initial;
+  }
+}
+
+async function saveDb(db) {
+  const temp = `${DATA_FILE}.tmp`;
+  await fs.writeFile(temp, JSON.stringify(db, null, 2), 'utf8');
+  await fs.rename(temp, DATA_FILE);
+}
+
+function userRecord(db, userId, username) {
+  db.users[userId] ??= { username, total: 0, entries: [] };
+  db.users[userId].username = username;
+  return db.users[userId];
+}
+
+function safeMission(value) {
+  return value.replace(/[\n\r]/g, ' ').trim().slice(0, 100);
+}
+
+async function registerCommands() {
+  const rest = new REST({ version: '10' }).setToken(token);
+  const route = guildId ? Routes.applicationGuildCommands(clientId, guildId) : Routes.applicationCommands(clientId);
+  await rest.put(route, { body: commands });
+  console.log(guildId ? 'Comandos registrados no servidor de teste.' : 'Comandos globais registrados.');
+}
+
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+client.once('ready', () => {
+  console.log(`Bot conectado como ${client.user.tag}`);
+});
+
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand() || interaction.commandName !== 'orb') return;
+
+  try {
+    const db = await loadDb();
+    const record = userRecord(db, interaction.user.id, interaction.user.username);
+    const sub = interaction.options.getSubcommand();
+
+    if (sub === 'ajuda') {
+      return interaction.reply({ ephemeral: true, content: '**Bot seguro de Orbs**\nUse `/orb registrar` depois de concluir uma missão manualmente. Este bot não assiste anúncios nem automatiza o Discord.' });
+    }
+
+    if (sub === 'saldo') {
+      return interaction.reply({ content: `**${interaction.user.username}**, seu saldo registrado é **${record.total.toLocaleString('pt-BR')} Orbs**.` });
+    }
+
+    if (sub === 'registrar') {
+      const amount = interaction.options.getInteger('quantidade', true);
+      const mission = safeMission(interaction.options.getString('missao', true));
+      record.total += amount;
+      record.entries.push({ amount, mission, at: new Date().toISOString(), guildId: interaction.guildId });
+      record.entries = record.entries.slice(-50);
+      await saveDb(db);
+      return interaction.reply({ content: `Registro salvo: **+${amount.toLocaleString('pt-BR')} Orbs** pela missão **${mission}**. Saldo: **${record.total.toLocaleString('pt-BR')} Orbs**.` });
+    }
+
+    if (sub === 'historico') {
+      const entries = record.entries.slice(-10).reverse();
+      if (!entries.length) return interaction.reply({ ephemeral: true, content: 'Você ainda não tem registros.' });
+      const lines = entries.map((entry) => `• **+${entry.amount.toLocaleString('pt-BR')}** — ${entry.mission}`);
+      return interaction.reply({ ephemeral: true, content: `**Seu histórico recente**\n${lines.join('\n')}` });
+    }
+
+    if (sub === 'ranking') {
+      const rows = Object.values(db.users).sort((a, b) => b.total - a.total).slice(0, 10);
+      const lines = rows.length ? rows.map((row, i) => `${i + 1}. **${row.username}** — ${row.total.toLocaleString('pt-BR')} Orbs`) : ['Ainda não há registros.'];
+      return interaction.reply({ embeds: [new EmbedBuilder().setTitle('Ranking de Orbs').setDescription(lines.join('\n')).setColor(0x5865f2)] });
+    }
+  } catch (error) {
+    console.error(error);
+    const message = 'Não foi possível concluir a operação. Verifique a configuração do bot.';
+    if (interaction.replied || interaction.deferred) return interaction.followUp({ content: message, ephemeral: true });
+    return interaction.reply({ content: message, ephemeral: true });
+  }
+});
+
+await registerCommands();
+await client.login(token);
